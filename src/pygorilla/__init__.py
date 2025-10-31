@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
 import time
-from typing import List, Optional, Sequence, Tuple
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
@@ -18,7 +18,12 @@ __all__ = [
     "submit_ranked_genes",
     "parse_results_html",
     "GorillaClient",
+    "go_terms_to_normalized_dataframe",
+    "go_terms_to_denormalized_dataframe",
 ]
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 DEFAULT_BASE_URL = "https://cbl-gorilla.cs.technion.ac.il"
 RUN_PATH_SEGMENT = "GOrilla"
@@ -73,6 +78,13 @@ class GorillaResult:
     go_terms: List[GORecord]
     metadata: RunMetadata
     raw_html: str
+
+    def to_go_terms_dataframe(self, *, normalized: bool = True) -> "pd.DataFrame":
+        """Return GO term results as either a normalized or denormalized pandas DataFrame."""
+
+        if normalized:
+            return go_terms_to_normalized_dataframe(self.go_terms)
+        return go_terms_to_denormalized_dataframe(self.go_terms)
 
 
 class GorillaClient:
@@ -274,6 +286,90 @@ def parse_results_html(html: str, *, result_url: Optional[str] = None) -> Gorill
         metadata=metadata,
         raw_html=html,
     )
+
+
+_NORMALIZED_COLUMNS = [
+    "go_id",
+    "description",
+    "p_value",
+    "fdr_q_value",
+    "enrichment",
+    "population_total",
+    "go_term_total",
+    "target_total",
+    "overlap_total",
+    "gene_count",
+    "gene_symbols",
+    "gene_descriptions",
+]
+
+_DENORMALIZED_COLUMNS = [
+    "go_id",
+    "description",
+    "gene_symbol",
+    "gene_description",
+    "p_value",
+    "fdr_q_value",
+    "enrichment",
+    "population_total",
+    "go_term_total",
+    "target_total",
+    "overlap_total",
+    "gene_index",
+]
+
+
+def go_terms_to_normalized_dataframe(go_terms: Sequence[GORecord]) -> "pd.DataFrame":
+    """Return a DataFrame with one row per GO term."""
+
+    pd = _require_pandas()
+    rows = []
+    for record in go_terms:
+        population_total, go_term_total, target_total, overlap_total = record.counts
+        rows.append(
+            {
+                "go_id": record.go_id,
+                "description": record.description,
+                "p_value": record.p_value,
+                "fdr_q_value": record.fdr_q_value,
+                "enrichment": record.enrichment,
+                "population_total": population_total,
+                "go_term_total": go_term_total,
+                "target_total": target_total,
+                "overlap_total": overlap_total,
+                "gene_count": len(record.genes),
+                "gene_symbols": [gene.symbol for gene in record.genes],
+                "gene_descriptions": [gene.description for gene in record.genes],
+            }
+        )
+    return pd.DataFrame(rows, columns=_NORMALIZED_COLUMNS)
+
+
+def go_terms_to_denormalized_dataframe(go_terms: Sequence[GORecord]) -> "pd.DataFrame":
+    """Return a DataFrame with one row per (GO term, gene) pair."""
+
+    pd = _require_pandas()
+    rows = []
+    for record in go_terms:
+        population_total, go_term_total, target_total, overlap_total = record.counts
+        for index, gene in enumerate(record.genes):
+            rows.append(
+                {
+                    "go_id": record.go_id,
+                    "description": record.description,
+                    "gene_symbol": gene.symbol,
+                    "gene_description": gene.description,
+                    "p_value": record.p_value,
+                    "fdr_q_value": record.fdr_q_value,
+                    "enrichment": record.enrichment,
+                    "population_total": population_total,
+                    "go_term_total": go_term_total,
+                    "target_total": target_total,
+                    "overlap_total": overlap_total,
+                    "gene_index": index,
+                }
+            )
+    return pd.DataFrame(rows, columns=_DENORMALIZED_COLUMNS)
 
 
 def _build_multipart_payload(
@@ -591,3 +687,13 @@ def _page_signals_completion(html: str) -> bool:
         "results page will be available",
     ]
     return any(marker in lowered for marker in completion_markers)
+
+
+def _require_pandas() -> "pd":
+    try:
+        import pandas as pd  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover - error path
+        raise ImportError(
+            "pandas is required to convert GO terms to DataFrames; install it with 'pip install pandas'."
+        ) from exc
+    return pd

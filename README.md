@@ -33,3 +33,16 @@ print(len(result.go_terms))  # -> number of enriched terms (possibly zero)
 
 `fast_mode` applies only to the ranked-list workflow; it is ignored when a background list
 is supplied.
+
+### Working with pandas
+
+Install pandas (already listed as a dependency) to export the enrichment results as DataFrames:
+
+```python
+normalized = result.to_go_terms_dataframe()
+denormalized = result.to_go_terms_dataframe(normalized=False)
+```
+
+The normalized frame contains one row per GO term along with the aggregate counts and the lists
+of gene symbols/descriptions. The denormalized version expands each GO term so that every gene
+appears on its own row, making it convenient to join with other gene-level data.
